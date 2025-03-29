@@ -1,13 +1,16 @@
 import os
 import requests
 import supabase
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from fastapi import UploadFile, File, HTTPException
-from fastapi import Request
 import uuid
+from io import BytesIO
+from fastapi.middleware.cors import CORSMiddleware
+from uuid import uuid4
+
+
 
 
 # Load environment variables
@@ -23,6 +26,13 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+     allow_origins=["*"],  # Adjust as needed
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all HTTP methods
+    allow_headers=["*"],  # Allows all headers
+)
 # Define request body model
 class SignupInput(BaseModel):
     full_name: str
@@ -36,25 +46,26 @@ class PasswordUpdateRequest(BaseModel):
 # Pydantic models
 class GalleryImageIn(BaseModel):
     category: str
-    image_url: str
     description: str
 
 
 
 @app.post("/signup")
 def signup(user: SignupInput):
-    response = supabase_client.auth.sign_up({
-        "email": user.email,
-        "password": user.password,
-        "options": {
-            "data": {
-                "full_name": user.full_name
+    try:
+        response = supabase_client.auth.sign_up({
+            "email": user.email,
+            "password": user.password,
+            "options": {
+                "data": {
+                    "full_name": user.full_name
+                }
             }
-        }
-    })
+        })
 
-    if response.error:
-        raise HTTPException(status_code=400, detail=response.error.message)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected database error: {str(e)}")
+
 
     return {
         "message": "User created successfully. Please verify your email.",
@@ -205,76 +216,86 @@ def admin_route(token: str = Depends(oauth2_scheme)):
     user_data = response.json()
     role = user_data.get("user_metadata", {}).get("role", "user")
 
-    if role != "admin":
+    if role != "Admin":
         raise HTTPException(status_code=403, detail="Access forbidden")
 
     return {"message": "Welcome, Admin!"}
 
 
-# 1️⃣ Add new image to category
-@app.post("/admin/gallery/add")
-def add_image(image: GalleryImageIn, role: str = Depends(get_current_user_role)):
-    if role != "Admin":
-        raise HTTPException(status_code=403, detail="Admins only")
-
-    data = {
-        "id": str(uuid.uuid4()),
-        "category": image.category.lower().strip(),
-        "image_url": image.image_url,
-        "description": image.description
-    }
-
-    result = supabase_client.table("gallery_images").insert(data).execute()
-    if result.error:
-        raise HTTPException(status_code=400, detail=result.error.message)
-
-    return {"message": "Image added successfully."}
-
-@app.post("/admin/gallery/upload-image")
-def upload_image(file: UploadFile = File(...)):
-    from uuid import uuid4
-
+@app.post("/admin/gallery/add-image")
+def add_image_with_upload(
+    category: str = Form(...),
+    description: str = Form(...),
+    file: UploadFile = File(...),
+):
     bucket_name = "gallery-images"
     file_ext = file.filename.split(".")[-1]
-    file_path = f"{uuid4()}.{file_ext}"
+    file_name = f"{uuid4()}.{file_ext}"
+    file_bytes = file.file.read()
 
-    content = file.file.read()
+    # 1️⃣ Upload to Supabase Storage
+    try:
+        upload_response = supabase_client.storage.from_(bucket_name).upload(
+            path=file_name,
+            file=file_bytes,
+            file_options={"content-type": file.content_type}
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected upload error: {str(e)}")
 
-    response = supabase_client.storage.from_(bucket_name).upload(
-        file_path,
-        content,
-        {"content-type": file.content_type}
-    )
+    image_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket_name}/{file_name}"
 
-    if response.get("error"):
-        raise HTTPException(status_code=400, detail=response["error"]["message"])
+    # 2️⃣ Insert metadata into Supabase DB
+    try:
+        db_response = supabase_client.table("gallery_images").insert({
+            "id": str(uuid4()),
+            "category": category.strip().lower(),
+            "description": description.strip(),
+            "image_url": image_url
+        }).execute()
 
-    # Get public URL
-    public_url = supabase_client.storage.from_(bucket_name).get_public_url(file_path)
-    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected database error: {str(e)}")
+
     return {
-        "message": "Image uploaded successfully.",
-        "url": public_url
+        "message": "Image uploaded and added to gallery successfully",
+        "image_url": image_url
     }
 
-# 2️⃣ Delete image by ID
+
+from urllib.parse import urlparse
+from fastapi import HTTPException
+
 @app.delete("/admin/gallery/delete/{image_id}")
-def delete_image(image_id: str, role: str = Depends(get_current_user_role)):
-    if role != "Admin":
-        raise HTTPException(status_code=403, detail="Admins only")
+def delete_image(image_id: str):
+    try:
+        # 1. Get image URL from Supabase DB
+        response = supabase_client.table("gallery_images").select("image_url").eq("id", image_id).single().execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Image not found in database.")
 
-    result = supabase_client.table("gallery_images").delete().eq("id", image_id).execute()
-    if result.error:
-        raise HTTPException(status_code=400, detail=result.error.message)
+        image_url = response.data["image_url"]
 
-    return {"message": "Image deleted successfully."}
+        # 2. Extract filename from URL
+        file_name = image_url.split("/")[-1]  # e.g., acc71dc0-...jpg
+
+        # 3. Delete from Supabase Storage (correct bucket!)
+        delete_result = supabase_client.storage.from_("gallery-images").remove([file_name])
+
+
+        # 4. Delete from Supabase DB
+        supabase_client.table("gallery_images").delete().eq("id", image_id).execute()
+
+        return {"message": "Image deleted from storage and database."}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 
 # 3️⃣ Get all images in a category
 @app.get("/admin/gallery/{category}")
 def get_images_by_category(category: str):
     result = supabase_client.table("gallery_images").select("*").eq("category", category.lower()).execute()
-
-    if result.error:
-        raise HTTPException(status_code=400, detail=result.error.message)
 
     return result.data
