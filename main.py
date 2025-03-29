@@ -159,12 +159,39 @@ def google_callback(token: str):
 
 
 
+# @app.post("/password-reset")
+# def password_reset(request: PasswordResetRequest):
+#     try:
+#         response = requests.post(
+#             f"{SUPABASE_URL}/auth/v1/recover",
+#             json={"email": request.email},
+#             headers={
+#                 "apikey": SUPABASE_KEY,
+#                 "Content-Type": "application/json"
+#             },
+#         )
+
+#         if response.status_code != 200:
+#             raise HTTPException(status_code=400, detail="Failed to send reset email")
+
+#         return {"message": "Password reset email sent. Please check your inbox."}
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/password-reset")
 def password_reset(request: PasswordResetRequest):
     try:
+        redirect_url = "http://localhost:5173/change-password"  # 👈 Replace with your frontend reset page
+
         response = requests.post(
             f"{SUPABASE_URL}/auth/v1/recover",
-            json={"email": request.email},
+            json={
+                "email": request.email,
+                "options": {
+                    "redirectTo": redirect_url
+                }
+            },
             headers={
                 "apikey": SUPABASE_KEY,
                 "Content-Type": "application/json"
