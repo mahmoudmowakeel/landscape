@@ -1,7 +1,7 @@
 import os
 import requests
 import supabase
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form, Request
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form, Request, Body
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -48,7 +48,8 @@ class GalleryImageIn(BaseModel):
     category: str
     description: str
 
-
+class PasswordResetRequest(BaseModel):
+    email: str
 
 @app.post("/signup")
 def signup(user: SignupInput):
@@ -156,36 +157,28 @@ def google_callback(token: str):
         }
     }
 
+
+
 @app.post("/password-reset")
-def password_reset(email: str):
-    response = requests.post(
-        f"{SUPABASE_URL}/auth/v1/recover",
-        json={"email": email},
-        headers={"apikey": SUPABASE_KEY, "Content-Type": "application/json"},
-    )
+def password_reset(request: PasswordResetRequest):
+    try:
+        response = requests.post(
+            f"{SUPABASE_URL}/auth/v1/recover",
+            json={"email": request.email},
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Content-Type": "application/json"
+            },
+        )
 
-    if response.status_code != 200:
-        raise HTTPException(status_code=400, detail="Failed to send reset email")
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to send reset email")
 
-    return {"message": "Password reset email sent. Please check your inbox."}
+        return {"message": "Password reset email sent. Please check your inbox."}
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/update-password")
-def update_password(data: PasswordUpdateRequest):
-    response = requests.put(
-        f"{SUPABASE_URL}/auth/v1/user",
-        json={"password": data.new_password},
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {data.access_token}",
-            "Content-Type": "application/json"
-        },
-    )
-
-    if response.status_code != 200:
-        raise HTTPException(status_code=400, detail="Failed to update password")
-
-    return {"message": "Password updated successfully."}
 
 def get_current_user_role(request: Request):
     token = request.headers.get("authorization", "").replace("Bearer ", "")
