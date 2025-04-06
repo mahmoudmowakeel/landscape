@@ -3,60 +3,54 @@ import { supabase } from './supabaseClient';
 
 const ChangePassword = () => {
   const [newPassword, setNewPassword] = useState('');
-  const [status, setStatus] = useState('');
-  const [token, setToken] = useState(null);
+  const [status, setStatus] = useState('Checking recovery token...');
+  const [isTokenValid, setIsTokenValid] = useState(false);
 
-  // Extract token from query string on mount
+  // Parse tokens from the hash fragment
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const t = params.get('token');
+    const hash = window.location.hash.substring(1); // remove the leading #
+    const params = new URLSearchParams(hash);
+    const access_token = params.get('access_token');
+    const refresh_token = params.get('refresh_token');
     const type = params.get('type');
 
-    if (t && type === 'recovery') {
-      setToken(t);
-      // Set session using recovery token
+    if (access_token && refresh_token && type === 'recovery') {
       supabase.auth
-        .setSession({ access_token: t, refresh_token: '' })
+        .setSession({ access_token, refresh_token })
         .then(({ error }) => {
           if (error) {
-            setStatus('Failed to set session.');
-            console.error('Session error:', error);
+            console.error('Error setting session:', error);
+            setStatus('Failed to set session. Token may be invalid or expired.');
           } else {
-            setStatus('Session set, you can now reset your password.');
+            setIsTokenValid(true);
+            setStatus('Session established. Please enter your new password.');
           }
         });
     } else {
-      setStatus('Invalid or missing recovery token.');
+      setStatus('Invalid or missing token in the URL.');
     }
   }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setStatus('Updating password...');
 
-    if (!token) {
-      setStatus('No valid token found.');
-      return;
-    }
-
-    const { data, error } = await supabase.auth.updateUser({
-      password: newPassword,
-    });
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
 
     if (error) {
-      setStatus('Error updating password.');
-      console.error('Update error:', error);
+      console.error('Password update error:', error);
+      setStatus('Failed to update password. Please try again.');
     } else {
-      setStatus('Password updated successfully!');
-      console.log('User:', data);
+      setStatus('✅ Password updated successfully! You may now log in.');
     }
   };
 
   return (
     <div style={{ padding: '2rem', maxWidth: '400px', margin: 'auto' }}>
-      <h2>Reset Your Password</h2>
+      <h2>Reset Password</h2>
       <p>{status}</p>
-      <form onSubmit={handleSubmit}>
-        <div>
+      {isTokenValid && (
+        <form onSubmit={handleSubmit}>
           <input
             type="password"
             placeholder="New Password"
@@ -65,20 +59,20 @@ const ChangePassword = () => {
             required
             style={{ padding: '0.5rem', width: '100%', marginBottom: '1rem' }}
           />
-        </div>
-        <button
-          type="submit"
-          style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: '#4CAF50',
-            color: 'white',
-            border: 'none',
-            cursor: 'pointer',
-          }}
-        >
-          Update Password
-        </button>
-      </form>
+          <button
+            type="submit"
+            style={{
+              padding: '0.5rem 1rem',
+              backgroundColor: '#4CAF50',
+              color: 'white',
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            Update Password
+          </button>
+        </form>
+      )}
     </div>
   );
 };
