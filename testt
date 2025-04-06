@@ -1,0 +1,86 @@
+import React, { useState, useEffect } from 'react';
+import { supabase } from './supabaseClient';
+
+const ChangePassword = () => {
+  const [newPassword, setNewPassword] = useState('');
+  const [status, setStatus] = useState('');
+  const [token, setToken] = useState(null);
+
+  // Extract token from query string on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('token');
+    const type = params.get('type');
+
+    if (t && type === 'recovery') {
+      setToken(t);
+      // Set session using recovery token
+      supabase.auth
+        .setSession({ access_token: t, refresh_token: '' })
+        .then(({ error }) => {
+          if (error) {
+            setStatus('Failed to set session.');
+            console.error('Session error:', error);
+          } else {
+            setStatus('Session set, you can now reset your password.');
+          }
+        });
+    } else {
+      setStatus('Invalid or missing recovery token.');
+    }
+  }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!token) {
+      setStatus('No valid token found.');
+      return;
+    }
+
+    const { data, error } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (error) {
+      setStatus('Error updating password.');
+      console.error('Update error:', error);
+    } else {
+      setStatus('Password updated successfully!');
+      console.log('User:', data);
+    }
+  };
+
+  return (
+    <div style={{ padding: '2rem', maxWidth: '400px', margin: 'auto' }}>
+      <h2>Reset Your Password</h2>
+      <p>{status}</p>
+      <form onSubmit={handleSubmit}>
+        <div>
+          <input
+            type="password"
+            placeholder="New Password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            required
+            style={{ padding: '0.5rem', width: '100%', marginBottom: '1rem' }}
+          />
+        </div>
+        <button
+          type="submit"
+          style={{
+            padding: '0.5rem 1rem',
+            backgroundColor: '#4CAF50',
+            color: 'white',
+            border: 'none',
+            cursor: 'pointer',
+          }}
+        >
+          Update Password
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default ChangePassword;
