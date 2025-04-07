@@ -9,8 +9,8 @@ import uuid
 from io import BytesIO
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
-
-
+from urllib.parse import urlparse
+from supabase import create_client, Client
 
 
 # Load environment variables
@@ -159,52 +159,32 @@ def google_callback(token: str):
 
 
 
-# @app.post("/password-reset")
-# def password_reset(request: PasswordResetRequest):
-#     try:
-#         response = requests.post(
-#             f"{SUPABASE_URL}/auth/v1/recover",
-#             json={"email": request.email},
-#             headers={
-#                 "apikey": SUPABASE_KEY,
-#                 "Content-Type": "application/json"
-#             },
-#         )
-
-#         if response.status_code != 200:
-#             raise HTTPException(status_code=400, detail="Failed to send reset email")
-
-#         return {"message": "Password reset email sent. Please check your inbox."}
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/password-reset")
 def password_reset(request: PasswordResetRequest):
     try:
-        redirect_url = "http://localhost:5173/change-password"  # 👈 Replace with your frontend reset page
 
         response = requests.post(
-            f"{SUPABASE_URL}/auth/v1/recover",
+            f"{SUPABASE_URL}/auth/v1/recover?redirect_to=http://localhost:5173/change-password",
             json={
-                "email": request.email,
-                "options": {
-                    "redirectTo": redirect_url
-                }
+                "email": request.email
             },
             headers={
                 "apikey": SUPABASE_KEY,
                 "Content-Type": "application/json"
-            },
+        },
         )
 
+
+        print("Supabase Response:", response.status_code, response.text)  # Debugging
+
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to send reset email")
+            raise HTTPException(status_code=400, detail=response.json())
 
         return {"message": "Password reset email sent. Please check your inbox."}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 def get_current_user_role(request: Request):
@@ -240,7 +220,6 @@ def admin_route(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=403, detail="Access forbidden")
 
     return {"message": "Welcome, Admin!"}
-
 
 @app.post("/admin/gallery/add-image")
 def add_image_with_upload(
@@ -283,9 +262,6 @@ def add_image_with_upload(
         "image_url": image_url
     }
 
-
-from urllib.parse import urlparse
-from fastapi import HTTPException
 
 @app.delete("/admin/gallery/delete/{image_id}")
 def delete_image(image_id: str):
