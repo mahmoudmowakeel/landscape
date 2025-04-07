@@ -1,7 +1,7 @@
 import os
 import requests
 import supabase
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form, Request, Body
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form, Request, Body,Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -221,47 +221,115 @@ def admin_route(token: str = Depends(oauth2_scheme)):
 
     return {"message": "Welcome, Admin!"}
 
-@app.post("/admin/gallery/add-image")
-def add_image_with_upload(
+# @app.post("/admin/gallery/add-image")
+# def add_image_with_upload(
+#     category: str = Form(...),
+#     description: str = Form(...),
+#     file: UploadFile = File(...),
+# ):
+#     bucket_name = "gallery-images"
+#     file_ext = file.filename.split(".")[-1]
+#     file_name = f"{uuid4()}.{file_ext}"
+#     file_bytes = file.file.read()
+
+#     # 1️⃣ Upload to Supabase Storage
+#     try:
+#         upload_response = supabase_client.storage.from_(bucket_name).upload(
+#             path=file_name,
+#             file=file_bytes,
+#             file_options={"content-type": file.content_type}
+#         )
+        
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Unexpected upload error: {str(e)}")
+
+#     image_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket_name}/{file_name}"
+
+#     # 2️⃣ Insert metadata into Supabase DB
+#     try:
+#         db_response = supabase_client.table("gallery_images").insert({
+#             "id": str(uuid4()),
+#             "category": category.strip().lower(),
+#             "description": description.strip(),
+#             "image_url": image_url
+#         }).execute()
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Unexpected database error: {str(e)}")
+
+#     return {
+#         "message": "Image uploaded and added to gallery successfully",
+#         "image_url": image_url
+#     }
+
+
+
+
+@app.post("/gallery/upload")
+async def upload_image(
     category: str = Form(...),
     description: str = Form(...),
-    file: UploadFile = File(...),
+    file: UploadFile = File(...)
 ):
+    # Clean and standardize the category input
+    category_cleaned = category.strip().lower()
+
+    # 1️⃣ Set up file upload to Supabase Storage
     bucket_name = "gallery-images"
     file_ext = file.filename.split(".")[-1]
     file_name = f"{uuid4()}.{file_ext}"
-    file_bytes = file.file.read()
+    file_bytes = await file.read()
 
-    # 1️⃣ Upload to Supabase Storage
+    # 2️⃣ Upload the file to Supabase Storage
     try:
-        upload_response = supabase_client.storage.from_(bucket_name).upload(
-            path=file_name,
-            file=file_bytes,
-            file_options={"content-type": file.content_type}
+        supabase_client.storage.from_(bucket_name).upload(
+            file_name,
+            file_bytes,
+            {"content-type": file.content_type}
         )
-        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected upload error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Storage upload failed: {str(e)}")
 
+    # Build public URL for the image
     image_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket_name}/{file_name}"
 
-    # 2️⃣ Insert metadata into Supabase DB
+    # 3️⃣ Insert metadata into the gallery_images table
     try:
-        db_response = supabase_client.table("gallery_images").insert({
+        supabase_client.table("gallery_images").insert({
             "id": str(uuid4()),
-            "category": category.strip().lower(),
+            "category": category_cleaned,  # Store the category as it is entered
             "description": description.strip(),
             "image_url": image_url
         }).execute()
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected database error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database insert failed: {str(e)}")
 
     return {
-        "message": "Image uploaded and added to gallery successfully",
+        "message": "Image uploaded successfully",
         "image_url": image_url
     }
 
+@app.get("/gallery/by-category")
+def get_images_by_category(category: str = Query(..., description="Category to filter images by")):
+    try:
+        response = supabase_client.table("gallery_images") \
+            .select("*") \
+            .eq("category", category.strip().lower()) \
+            .order("created_at", desc=True) \
+            .execute()
+        
+        images = response.data
+        if not images:
+            return {"message": f"No images found for category: {category}", "images": []}
+        
+        return {
+            "category": category,
+            "count": len(images),
+            "images": images
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch images: {str(e)}")
 
 @app.delete("/admin/gallery/delete/{image_id}")
 def delete_image(image_id: str):
